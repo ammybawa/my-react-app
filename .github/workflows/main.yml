@@ -1,148 +1,56 @@
-name: Auto-Rollback Deploy
+name: Deploy React App
 
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment (staging / production)'
-        required: true
-        default: 'staging'
-      docker_image:
-        description: 'Full image name (e.g. myorg/myapp)'
-        required: true
-        default: 'myorg/myapp'
-
-concurrency:
-  group: deploy-${{ github.event.inputs.environment }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+  push:
+    branches:
+      - main
 
 jobs:
-  # Build and push candidate image tagged by commit SHA
-  build_and_push:
-    name: Build & Push Image
+  deploy:
     runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.set-tag.outputs.image_tag }}
+
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Login to Docker registry
-        run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login ${{ secrets.DOCKER_REGISTRY }} -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Build and push image
-        id: set-tag
-        run: |
-          TAG=${GITHUB_SHA::8}
-          IMAGE="${{ github.event.inputs.docker_image }}:${TAG}"
-          echo "Building $IMAGE"
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          # write step output
-          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
-
-  # Deploy candidate to the server. If any command fails here the job fails.
-  deploy:
-    name: Deploy Candidate
-    runs-on: ubuntu-latest
-    needs: build_and_push
-    steps:
-      - name: Prepare SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Deploy on remote via SSH (pull candidate and run)
-        env:
-          IMAGE: ${{ github.event.inputs.docker_image }}
-          TAG: ${{ needs.build_and_push.outputs.image_tag }}
-          APP_NAME: ${{ secrets.APP_NAME }}
-        run: |
-          # remote script: fail fast (set -e)
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SERVER }} \
-            'set -e
-             echo "Pulling $IMAGE:$TAG"
-             docker pull '"$IMAGE"':'"$TAG"'
-             echo "Stopping previous container (if any)"
-             docker stop '"$APP_NAME"' || true
-             docker rm '"$APP_NAME"' || true
-             echo "Starting new container"
-             docker run -d --name '"$APP_NAME"' --restart=always -p 80:80 '"$IMAGE"':'"$TAG"'
-             echo "Deployed candidate successfully."'
-
-  # If deploy succeeded, promote candidate -> stable-<env> tag
-  promote:
-    name: Promote to stable
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: needs.deploy.result == 'success'
-    steps:
-      - name: Login to Docker registry
-        run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login ${{ secrets.DOCKER_REGISTRY }} -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Tag and push stable image
-        env:
-          IMAGE: ${{ github.event.inputs.docker_image }}
-          TAG: ${{ needs.build_and_push.outputs.image_tag }}
-          STABLE: stable-${{ github.event.inputs.environment }}
-        run: |
-          echo "Promoting $IMAGE:$TAG -> $IMAGE:$STABLE"
-          docker pull $IMAGE:$TAG
-          docker tag $IMAGE:$TAG $IMAGE:$STABLE
-          docker push $IMAGE:$STABLE
-          echo "Promoted to $IMAGE:$STABLE"
-
-  # Rollback job: runs automatically only if deploy failed
-  rollback:
-    name: Automatic Rollback
-    runs-on: ubuntu-latest
-    needs: [build_and_push, deploy]
-    if: needs.deploy.result == 'failure'
-    steps:
-      - name: Prepare SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Collect remote logs (short)
-        run: |
-          mkdir -p deploy-logs
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SERVER }} \
-            'docker logs --tail 200 ${{ secrets.APP_NAME }}' > deploy-logs/remote-docker.log || true
-
-      - name: Upload logs artifact
-        uses: actions/upload-artifact@v4
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v0.1.10
         with:
-          name: deploy-logs
-          path: deploy-logs/
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
 
-      - name: Determine rollback target (stable tag)
-        id: determine
-        run: |
-          IMAGE="${{ github.event.inputs.docker_image }}"
-          STABLE_TAG="stable-${{ github.event.inputs.environment }}"
-          echo "image_to_pull=${IMAGE}:${STABLE_TAG}" >> $GITHUB_OUTPUT
+            echo "📦 Starting deployment on server"
 
-      - name: Perform rollback on server
-        env:
-          IMAGE_TO_PULL: ${{ steps.determine.outputs.image_to_pull }}
-          APP_NAME: ${{ secrets.APP_NAME }}
-        run: |
-          echo "Rolling back on server to $IMAGE_TO_PULL"
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SERVER }} \
-            'set -e
-             echo "Pulling rollback image: '"$IMAGE_TO_PULL"'"
-             docker pull '"$IMAGE_TO_PULL"'
-             echo "Stopping current container (if any)"
-             docker stop '"$APP_NAME"' || true
-             docker rm '"$APP_NAME"' || true
-             echo "Starting container with rollback image"
-             docker run -d --name '"$APP_NAME"' --restart=always -p 80:80 '"$IMAGE_TO_PULL"'
-             echo "Rollback completed."'
+            # Define paths
+            APP_DIR=/var/www/myapp
+            BACKUP_DIR=/var/www/backups/myapp_$(date +%Y%m%d%H%M%S)
+
+            # Step 1: Backup current build
+            if [ -d "$APP_DIR/build" ]; then
+              echo "📂 Backing up current build"
+              mkdir -p /var/www/backups
+              mv $APP_DIR/build $BACKUP_DIR
+            fi
+
+            # Step 2: Pull latest code
+            cd $APP_DIR
+            git fetch --all
+            git reset --hard origin/main
+
+            # Step 3: Install deps & build
+            echo "⚙️ Running npm install & build"
+            npm install
+            if npm run build; then
+              echo "✅ Build succeeded"
+            else
+              echo "❌ Build failed, rolling back..."
+              rm -rf $APP_DIR/build
+              mv $BACKUP_DIR $APP_DIR/build
+              exit 1
+            fi
+
+            echo "🚀 Deployment completed successfully!"
