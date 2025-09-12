@@ -8,7 +8,7 @@ on:
         required: true
         default: 'staging'
       docker_image:
-        description: 'test_image'
+        description: 'Full image name (e.g. myorg/myapp)'
         required: true
         default: 'myorg/myapp'
 
