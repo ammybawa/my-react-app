@@ -1,0 +1,62 @@
+name: Auto-Rollback Deploy (SSH)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (staging | production)'
+        required: true
+        default: 'staging'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------- BUILD ----------
+      - name: Build
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
+
+      # ---------- TEST ----------
+      - name: Test
+        run: |
+          chmod +x scripts/test.sh
+          ./scripts/test.sh
+
+      # ---------- DEPLOY ----------
+      - name: Deploy
+        run: |
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh $ENVIRONMENT
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # ---------- ROLLBACK (only if something fails above) ----------
+      - name: Rollback (SSH)
+        if: ${{ failure() }}
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST "echo 'SSH connection test successful'"
+          chmod +x scripts/rollback.sh
+          ./scripts/rollback.sh $ENVIRONMENT
