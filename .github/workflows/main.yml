@@ -31,13 +31,13 @@ jobs:
       # ---------- TEST ----------
       - name: Test
         run: |
-          chmod +x scripts/test.sh
+          sudo chmod +x scripts/test.sh
           ./scripts/test.sh
 
       # ---------- DEPLOY ----------
       - name: Deploy
         run: |
-          chmod +x scripts/deploy.sh
+         sudo chmod +x scripts/deploy.sh
           ./scripts/deploy.sh $ENVIRONMENT
         env:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
