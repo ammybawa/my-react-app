@@ -1,56 +1,51 @@
-name: Deploy React App
+name: Build & Deploy React (atomic + automatic rollback)
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ "main" ]   # or the branch you want to trigger on
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v0.1.10
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            set -e
+          node-version: '18'
 
-            echo "📦 Starting deployment on server"
+      - name: Install
+        run: npm ci
 
-            # Define paths
-            APP_DIR=/var/www/myapp
-            BACKUP_DIR=/var/www/backups/myapp_$(date +%Y%m%d%H%M%S)
+      - name: Build
+        run: npm run build --if-present
 
-            # Step 1: Backup current build
-            if [ -d "$APP_DIR/build" ]; then
-              echo "📂 Backing up current build"
-              mkdir -p /var/www/backups
-              mv $APP_DIR/build $BACKUP_DIR
-            fi
+      - name: Archive build
+        run: |
+          tar -czf build.tar.gz -C build .
 
-            # Step 2: Pull latest code
-            cd $APP_DIR
-            git fetch --all
-            git reset --hard origin/main
+      - name: Copy build to server (scp)
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}            # optional, leave blank if not using
+          source: "build.tar.gz"
+          target: "/tmp/${{ github.run_id }}"      # puts tar under a unique temporary folder
 
-            # Step 3: Install deps & build
-            echo "⚙️ Running npm install & build"
-            npm install
-            if npm run build; then
-              echo "✅ Build succeeded"
-            else
-              echo "❌ Build failed, rolling back..."
-              rm -rf $APP_DIR/build
-              mv $BACKUP_DIR $APP_DIR/build
-              exit 1
-            fi
-
-            echo "🚀 Deployment completed successfully!"
+      - name: Run remote deploy script (executes scripts/remote_deploy.sh on server)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script_path: scripts/remote_deploy.sh
+          envs: TAR_PATH,APP_ROOT,KEEP_RELEASES
+        env:
+          TAR_PATH: "/tmp/${{ github.run_id }}/build.tar.gz"
+          APP_ROOT: "/var/www/html/my-react-app"
+          KEEP_RELEASES: "5"
