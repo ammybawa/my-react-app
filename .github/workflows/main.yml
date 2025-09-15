@@ -9,21 +9,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Setup Node.js
       - name: Use Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
+      # Install dependencies
+      # 👉 If your app is in a folder (like frontend/), change "cd frontend"
       - name: Install dependencies
-        run: npm install
+        run: |
+          cd .
+          npm install
 
+      # Build React App
       - name: Build React App
-        run: CI=false npm run build --if-present
+        run: |
+          cd .
+          CI=false npm run build --if-present
 
-      # 🔑 Setup SSH
+      # Setup SSH for deployment
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -31,6 +40,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
+      # Deploy to Server (create backup + prepare folder)
       - name: Deploy to Server
         run: |
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
@@ -42,6 +52,25 @@ jobs:
             rm -rf $BACKUP_DIR
             cp -r $APP_DIR $BACKUP_DIR || true
 
-            echo "Deploying new build..."
+            echo "Cleaning old build..."
             rm -rf $APP_DIR/build
-            mkdir -
+            mkdir -p $APP_DIR
+          EOF
+
+      # Copy new build files to server
+      - name: Copy new build files
+        run: |
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -r build/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }}:/var/www/html/my-react-app/
+
+      # Verify deployment, rollback if failed
+      - name: Verify deployment
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
+            if [ ! -d "/var/www/html/my-react-app/build" ]; then
+              echo "Build folder missing! Rolling back..."
+              rm -rf /var/www/html/my-react-app
+              mv /var/www/html/my-react-app-backup /var/www/html/my-react-app
+              exit 1
+            fi
+            echo "✅ Deployment successful!"
+          EOF
