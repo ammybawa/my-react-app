@@ -1,50 +1,50 @@
-name: Build & Deploy React (atomic + automatic rollback)
+name: Build & Deploy React (atomic + rollback)
 
 on:
   push:
-    branches: [ "main" ]   # or the branch you want to trigger on
+    branches: [ "main" ]   # Change if you deploy from another branch
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      - name: Install
+      - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build React app
         run: npm run build --if-present
 
-      - name: Archive build
+      - name: Archive build folder
         run: |
           tar -czf build.tar.gz -C build .
 
-      - name: Copy build to server (scp)
+      - name: Upload build to server
         uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}            # optional, leave blank if not using
+          port: ${{ secrets.SSH_PORT }}   # optional
           source: "build.tar.gz"
-          target: "/tmp/${{ github.run_id }}"      # puts tar under a unique temporary folder
+          target: "/tmp/${{ github.run_id }}/"
 
-      - name: Run remote deploy script (executes scripts/remote_deploy.sh on server)
+      - name: Run remote deploy script
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
-          script_path: scripts/remote_deploy.sh
-          envs: TAR_PATH,APP_ROOT,KEEP_RELEASES
+          script_path: /var/www/html/my-react-app/scripts/remote_deploy.sh
         env:
           TAR_PATH: "/tmp/${{ github.run_id }}/build.tar.gz"
           APP_ROOT: "/var/www/html/my-react-app"
