@@ -23,35 +23,25 @@ jobs:
       - name: Build React App
         run: CI=false npm run build --if-present
 
+      # 🔑 Setup SSH
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
       - name: Deploy to Server
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
             set -e
             APP_DIR="/var/www/html/my-react-app"
             BACKUP_DIR="/var/www/html/my-react-app-backup"
 
             echo "Creating backup of current version..."
             rm -rf $BACKUP_DIR
-            cp -r $APP_DIR $BACKUP_DIR
+            cp -r $APP_DIR $BACKUP_DIR || true
 
             echo "Deploying new build..."
             rm -rf $APP_DIR/build
-            mkdir -p $APP_DIR
-            exit
-          EOF
-
-      - name: Copy new build files
-        run: |
-          scp -o StrictHostKeyChecking=no -r build/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }}:/var/www/html/my-react-app/
-
-      - name: Verify deployment
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
-            if [ ! -d "/var/www/html/my-react-app/build" ]; then
-              echo "Build folder missing! Rolling back..."
-              rm -rf /var/www/html/my-react-app
-              mv /var/www/html/my-react-app-backup /var/www/html/my-react-app
-              exit 1
-            fi
-            echo "Deployment successful!"
-          EOF
+            mkdir -
